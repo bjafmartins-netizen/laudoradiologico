@@ -1,0 +1,140 @@
+import os
+import sqlite3
+import speech_recognition as sr
+import google.generativeai as genai
+from datetime import datetime
+
+# =================================================================
+# 1. CONFIGURAÇÕES INICIAIS
+# =================================================================
+
+# Substitua 'SUA_CHAVE_AQUI' pela sua chave da API do Gemini
+GOOGLE_API_KEY = "SUA_CHAVE_AQUI"
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# Configuração do Banco de Dados Local (SQLite)
+def configurar_banco_dados():
+    conn = sqlite3.connect('banco_laudos.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS laudos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT,
+            transcricao TEXT,
+            laudo_final TEXT,
+            revisao TEXT
+        )
+    ''')
+    conn.commit()
+    return conn
+
+# =================================================================
+# 2. MÓDULO DE RECONHECIMENTO DE VOZ
+# =================================================================
+
+def capturar_voz():
+    """Captura o áudio do microfone e converte em texto."""
+    reconhecedor = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("\n[Ouvindo] Pode ditar os achados do exame...")
+        audio = reconhecedor.listen(source)
+        try:
+            texto = reconhecedor.recognize_google(audio, language='pt-BR')
+            print(f"[Transcrição]: {texto}")
+            return texto
+        except Exception as e:
+            print(f"Erro ao reconhecer voz: {e}")
+            return None
+
+# =================================================================
+# 3. AGENTES DE INTELIGÊNCIA ARTIFICIAL
+# =================================================================
+
+def agente_gerador(transcricao):
+    """Agente especializado em redação de laudos estruturados."""
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Aqui você insere seu banco de informações específico e o prompt
+    prompt_sistema = f"""
+    Você é um Radiologista Sênior. Sua tarefa é criar um laudo estruturado baseado na transcrição abaixo.
+    Use terminologia médica precisa (ex: sinal em $T1$ e $T2$, hipossinal, etc).
+    
+    BANCO DE INFORMAÇÕES/ESTILO:
+    - Siga o padrão da ESR (European Society of Radiology).
+    - Estrutura: Técnica, Achados, Impressão.
+    
+    TRANSCRIÇÃO DO MÉDICO: {transcricao}
+    """
+    
+    response = model.generate_content(prompt_sistema)
+    return response.text
+
+def agente_revisor(transcricao_original, laudo_gerado):
+    """Agente focado em segurança e revisão de erros."""
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    prompt_revisao = f"""
+    Você é um Revisor de Laudos Médicos. Compare a transcrição original com o laudo gerado.
+    Verifique se houve:
+    1. Omissão de achados mencionados na voz.
+    2. Erros de lateralidade (Direita/Esquerda).
+    3. Alucinações médicas.
+    
+    TRANSCRIÇÃO ORIGINAL: {transcricao_original}
+    LAUDO GERADO: {laudo_gerado}
+    
+    Responda apenas com o laudo final corrigido ou 'APROVADO' seguido do laudo se estiver perfeito.
+    """
+    
+    response = model.generate_content(prompt_revisao)
+    return response.text
+
+# =================================================================
+# 4. EXPORTAÇÃO E ARMAZENAMENTO
+# =================================================================
+
+def salvar_resultados(transcricao, laudo_final):
+    # Salvar no Banco de Dados
+    conn = sqlite3.connect('banco_laudos.db')
+    cursor = conn.cursor()
+    data_atual = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    cursor.execute('INSERT INTO laudos (data, transcricao, laudo_final) VALUES (?, ?, ?)', 
+                   (data_atual, transcricao, laudo_final))
+    conn.commit()
+    conn.close()
+
+    # Salvar TXT na Área de Trabalho
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    caminho_arquivo = os.path.join(desktop, "laudo_pronto.txt")
+    
+    with open(caminho_arquivo, "w", encoding="utf-8") as f:
+        f.write(f"LAUDO RADIOLÓGICO - {data_atual}\n")
+        f.write("-" * 30 + "\n")
+        f.write(laudo_final)
+    
+    print(f"\n[Sucesso] Laudo salvo na Área de Trabalho e no Banco de Dados!")
+
+# =================================================================
+# 5. FLUXO PRINCIPAL (EXECUÇÃO)
+# =================================================================
+
+def executar_projeto():
+    configurar_banco_dados()
+    
+    # Passo 1: Voz
+    transcricao = capturar_voz()
+    if not transcricao: return
+
+    # Passo 2: Geração
+    print("\n[IA] Gerando laudo estruturado...")
+    laudo_inicial = agente_gerador(transcricao)
+
+    # Passo 3: Revisão
+    print("[IA] Revisando o laudo...")
+    laudo_revisado = agente_revisor(transcricao, laudo_inicial)
+
+    # Passo 4: Salvar e Exportar
+    salvar_resultados(transcricao, laudo_revisado)
+
+if __name__ == "__main__":
+    executar_projeto()

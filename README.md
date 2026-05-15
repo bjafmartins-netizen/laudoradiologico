@@ -1,0 +1,2 @@
+# laudoradiologico
+emissão de laudo
